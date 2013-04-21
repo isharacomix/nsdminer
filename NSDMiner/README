@@ -1,0 +1,121 @@
+NSDMiner
+    Barry Peddycord III (bwpeddyc@ncsu.edu)
+    Arun Natarajan (anatara@ncsu.edu)
+    Dr. Peng Ning (pning@ncsu.edu)
+
+Support Page: https://sourceforge.net/p/nsdminer/discussion/
+Bug Reports:  https://sourceforge.net/p/nsdminer/tickets/
+              (Requires sourceforge.net login)
+
+NSDMiner determines network service dependencies by analyzing flows of network
+traffic that are either collected from routers (using Cisco NetFlow records) or
+created from individual packets (using softflowd). This package provides the
+NSDMiner core tool, along with a frontend that makes it possible to provide
+input in various file formats, such as pcap files.
+
+To use NSDMiner, first install our modified version of softflowd (use
+'./configure && make && sudo make install'). After softflowd is installed,
+install NSDMiner using 'sudo python setup.py install'. Softflowd requires
+libpcap-dev to compile.
+
+In addition to installing the frontend nsdmine, the nsdminer python package
+will also be installed, allowing a user to work with the data structure
+representing the dependency graph on their own, giving them fine-grained control
+over how it is processed.
+
+If pcap files are provided as input, then intermediary flow files will be
+automatically saved in a "flows" subdirectory in the current working
+directory. These flows can be provided in subsequent runs of NSDMiner to speed
+up dependency calculations.
+
+
+Usage:
+    nsdmine [options] infiles...
+    
+    Options:
+        --memlimit=N    The number of flows to track at a given time. Is 100000000 by
+                        default, but may need to be set lower on constrained machines
+        
+        --exclusive     Use the exclusive mode heuristic and drop conflicting flows
+        
+        --alpha=A       Filter all dependencies with a confidence value <A
+                        A should be a positive integer between 1 and 100
+        
+        --minlimit=N    The minimum number of accesses required to track dependencies
+                        for a service. Default 50.
+        
+        --ratio         Use the original ratio-based ranking (less accurate)
+        
+        --infer=S,A     Use inference with similarity and agreement parameters S,A
+                        S and A should be positive integers between 1 and 100.
+                        Lower values will increase true positive detection,
+                        but also false positives. 50 for both is generally
+                        reasonable.
+        
+        --clusters=S,A  Use clustering with support and alpha threshold S,A
+                        S should be a positive integer, usually around 5 to 10.
+                        A should be a positive integer between 1 and 100, less than --alpha
+        
+        --filter=ips..  Only track dependencies from IP addresses in the filter.
+                        Should be a comma-separated list of partial IP addresses.
+                        --filter=127.,192. will include all of 127.* and 192.*
+        
+        --pcap          Read from a sequence of pcap files rather than flow files.
+                        This option requires the use of softflowd. The flows will
+                        be saved in the current directory, in a new subdirectory
+                        called "flows".
+
+        --cisco         Read from a sequence of Cisco v5 netflows, converting the
+                        binary records to ascii flows, saving them in a new directory
+                        called "flows".
+                        NOTE: THIS IS EXPERIMENTAL -- I haven't had a chance to test
+                                                      this yet!
+
+    The infiles should be a chronologically-ordered list of either pcap files
+    (when using option --pcap) or ascii flow records formatted in the following
+    way:
+    
+start_time  end_time  duration  protocol  src_ip  src_port  dest_ip  dest_port  src_flags  dst_flags  no_packets  no_octets  direction
+    start_time          UNIX start time
+    end_time            UNIX end time
+    duration            end_time - start_time
+    protocol            TCP or UDP
+    src_ip              Source IP address
+    src_port            Source port
+    dest_ip             Destination IP address
+    dest_port           Destination port
+    src_flags           TCP Flags for the outbound flow. A string of 6 characters,
+                        with a period '.' if false and a letter if True.
+                            U - URG
+                            A - ACK
+                            P - PSH
+                            R - RST
+                            S - SYN
+                            F - FIN
+                        So a flow that had the SYN and ACK flags set would
+                        read ".A..S.".
+    dest_flags          TCP Flags for the inbound flow
+    no_packets          Number of packets
+    no_octects          Total number of bytes send
+    direction           1 if a one-way flow (src -> dest)
+                        2 if bidirectional (src <-> dest)
+    
+    Parameters are seperated by whitespace with one flow record on each line.
+
+
+Output:
+    The output of NSDMiner is a dependency graph, written in ASCII and written
+    to stdout, formatted as follows:    
+    
+<ip address A>:<port A>:[TCP/UDP] <# instances>
+    <ip address B>      <port B> [TCP/UDP]      <confidence B>
+    <ip address C>      <port C> [TCP/UDP]      <confidence C>
+    ...                 ...                     ...
+    <ip address Z>      <port Z> [TCP/UDP]      <confidence Z>
+    
+    
+    This output says that service A (that runs on ip address A on port A)
+    depends on services B through Z which run on their respective machines and
+    ports. The dweight shows how many times that the service flow appeared
+    within the flow of service A.
+

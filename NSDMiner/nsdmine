@@ -1,0 +1,179 @@
+#! /usr/bin/env python
+
+# This file is part of NSDMiner
+# Copyright 2011, 2012, North Carolina State University
+#
+# Authors:
+#   Barry Peddycord <bwpeddyc@ncsu.edu>
+#   Peng Ning <pning@ncsu.edu>
+
+# This is a front-end for NSDMiner. You can also import the nsdminer
+# package and manipulate the communication graphs yourself.
+
+import sys
+import os
+from nsdminer import commgraph
+from nsdminer import nsdminer
+
+# This is all error checking.
+if ( len(sys.argv) < 2 ):
+    print("")
+    print("Usage: ")
+    print("  nsdmine [options] infiles...")
+    print("  Options:")
+    print("    --memlimit=N    The number of flows to track at a given time. Is")
+    print("                    100000000 by default, but may need to be set lower")
+    print("                    on constrained machines.")
+    print("    --exclusive     Use the exclusive mode heuristic and drop conflicting")
+    print("                    flows")
+    print("    --alpha=A       Filter all dependencies with a confidence value <A")
+    print("                    A should be a positive integer between 1 and 100")
+    print("    --minlimit=N    The minimum number of accesses required to track")
+    print("                    dependencies for a service. Default 50.")
+    print("    --ratio         Use the original ratio-based ranking (less efficient)")
+    print("    --infer=S,A     Use inference with similarity and agreement parameters S,A")
+    print("                    S and A should be positive integers between 1 and 100")
+    print("    --clusters=S,A  Use clustering with support and alpha threshold S,A")
+    print("                    S should be a positive integer, usually around 5 to 10.")
+    print("                    A should be a positive integer between 1 and 100, less")
+    print("                    than --alpha")
+    print("    --filter=ips..  Only track dependencies from IP addresses in the filter.")
+    print("                    Should be a comma-separated list of partial IP addresses.")
+    print("                    --filter=127.,192. will include all of 127.* and 192.*")
+    print("    --pcap          Read from a sequence of pcap files rather than flow files.")
+    print("                    This option requires the use of softflowd.")
+    print("    --cisco         This specifies that the flow files are formatted as Cisco")
+    print("                    netflows: http://netflow.caligare.com/netflow_v5.htm")
+    print("")
+    sys.exit(1)
+
+
+# Parse the options. We don't spend a lot of time doing this properly.
+options = []
+files = []
+for i in sys.argv[1:]:
+    if i.startswith("--"):
+        options.append(i)
+    else:
+        files.append(i)
+
+# Default values.
+memlimit = 100000000
+shared = True
+alpha = 0
+minlimit = 50
+log = True
+infer = None
+clust = None
+filt = []
+pcap = False
+cisco = False
+
+# Apply the options.
+for o in options:
+    if o.startswith("--exclusive"):
+        shared = False
+    elif o.startswith("--pcap"):
+        pcap = True
+    elif o.startswith("--cisco"):
+        cisco = True
+    elif o.startswith("--ratio"):
+        log = False
+    elif o.startswith("--memlimit="):
+        memlimit = int(o[11:])
+    elif o.startswith("--minlimit="):
+        minlimit = int(o[11:])
+    elif o.startswith("--alpha="):
+        alpha = int(o[8:])
+    elif o.startswith("--filter="):
+        filt = o[9:].split(",")
+    elif o.startswith("--infer="):
+        x,y = o[8:].split(",")
+        infer = float(x),float(y)
+    elif o.startswith("--clusters="):
+        x,y = o[11:].split(",")
+        clust = int(x),int(y)
+    else:
+        print("Unknown option '%s'"%o)
+        sys.exit(-1)
+
+graph = None
+
+if pcap and cisco:
+    print("--cisco and --pcap can't both be specified.")
+    sys.exit(-1)
+
+
+# First, if we're doing pcap mode, we need to run softflowd to turn
+# these into flow files. We'll save these in the local directory, since
+# that's the best we can do.
+if pcap:
+    files2 = []
+    for i in files:
+        q = i.rfind("/")
+        fl = ""
+        if q == -1:
+            try: os.mkdir("flows")
+            except: pass
+            fl = "./flows/"+i+".fl"
+        else:
+            try: os.mkdir(i[:q]+"/flows")
+            except: pass
+            fl = i[:q]+"/flows"+i[q:]+".fl"
+        files2.append(fl)
+        com1 = "softflowd -m 10000000 -d -o "+fl+".tmp -r "+i
+        com2 = "sort -k 1,1  "+fl+".tmp > "+fl
+        com3 = "rm "+fl+".tmp"
+        os.system(com1)
+        os.system(com2)
+        os.system(com3)
+    files = files2
+if cisco:
+    files2 = []
+    for i in files:
+        q = i.rfind("/")
+        fl = ""
+        if q == -1:
+            try: os.mkdir("flows")
+            except: pass
+            fl = "./flows/"+i+".fl"
+        else:
+            try: os.mkdir(i[:q]+"/flows")
+            except: pass
+            fl = i[:q]+"/flows"+i[q:]+".fl"
+        files2.append(fl)
+        k = nsdminer.parse_ciscov5(i)
+        ff = open(fl,"w")
+        for j in k:
+            ff.write( j + "\n" )
+        ff.close()
+
+# This runs NSDMiner, which is the hard part.
+g = nsdminer.build_commgraph(shared,memlimit,filt,*files)
+g2 = g.rank( minlimit, log )
+
+# Now filter the graph based on our options, and then output the
+# dependencies.
+clusters = None
+sims = None
+if clust:
+    clusters = g.prune(clust[1]).identify_clusters(clust[0])
+if infer:
+    sims = g2.identify_sims(infer[0]*.01, infer[1]*.01)
+if sims:
+    g2 = g2.apply_sims(sims)
+if clusters:
+    g2 = g2.apply_clusters(clusters)
+
+# Hopefully we're redirecting to a file here.
+print(str(g2))
+if clusters:
+    print("\n")
+    i = 0
+    for c in clusters[1:]:
+        i += 1
+        print("cluster"+str(i)+":")
+        for s in c:
+            print("    "+str(s))
+        print("")
+
